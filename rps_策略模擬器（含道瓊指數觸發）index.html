@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>剪刀石頭布：策略模擬器（含道瓊觸發）</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { fontFamily: { sans: ["Inter", "Noto Sans TC", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"] } } }
+    }
+  </script>
+  <style>
+    .card { @apply rounded-2xl bg-white/80 dark:bg-zinc-900/80 backdrop-blur shadow p-5; }
+    .btn { @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white dark:bg-white dark:text-black hover:opacity-90 transition; }
+    .btn-soft { @apply bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100; }
+    .chip { @apply text-xs px-2 py-0.5 rounded-full bg-zinc-200 dark:bg-zinc-700; }
+    .kbd { @apply px-2 py-0.5 rounded border border-zinc-300 bg-white text-xs; }
+    .grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+    @media print { .no-print { display: none !important; } }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-950 dark:to-zinc-900 text-zinc-900 dark:text-zinc-100">
+  <main class="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
+    <header class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold">剪刀石頭布：策略模擬器</h1>
+        <p class="text-sm text-zinc-600 dark:text-zinc-400 mt-1">支援「高中低」三檔出拳策略，並可依道瓊工業指數（DJI）當日漲跌自動切換。（可手動輸入，或嘗試擷取）</p>
+      </div>
+      <div class="no-print flex items-center gap-2">
+        <button id="toggleTheme" class="btn btn-soft" title="切換深色/淺色">🌗 主題</button>
+        <a class="btn" href="#" id="dlConfig">⬇️ 下載設定</a>
+      </div>
+    </header>
+
+    <!-- Config Panels -->
+    <section class="grid-auto">
+      <div class="card space-y-4">
+        <h2 class="font-semibold text-lg">1) 道瓊觸發條件</h2>
+        <label class="flex items-center gap-2"><input type="checkbox" id="useDow" class="h-4 w-4"> 啟用「依道瓊漲跌自動選擇策略」</label>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label class="text-sm">道瓊變動（%）<span class="chip">可手填</span></label>
+            <input id="dowChange" type="number" step="0.01" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800" placeholder="例如 0.35 或 -0.80" />
+          </div>
+          <div>
+            <label class="text-sm">上漲門檻 → 選 <b>高</b></label>
+            <input id="thUp" type="number" step="0.01" value="0.50" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800" />
+          </div>
+          <div>
+            <label class="text-sm">下跌門檻 → 選 <b>低</b></label>
+            <input id="thDown" type="number" step="0.01" value="-0.50" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800" />
+          </div>
+        </div>
+        <div class="flex gap-2 no-print">
+          <button id="fetchDow" class="btn btn-soft" title="嘗試從公開來源擷取；可能受 CORS 限制">⚡ 嘗試擷取今日道瓊</button>
+          <span class="text-xs text-zinc-500">若擷取失敗，請手動輸入或自行串接 API。</span>
+        </div>
+        <p class="text-sm">規則：若變動 ≥ 上漲門檻 → 使用 <b>高風險</b>； ≤ 下跌門檻 → 使用 <b>低風險</b>；介於兩者 → 使用 <b>中等</b>。</p>
+        <p class="text-sm">目前自動判定：<span id="autoPick" class="font-semibold">（未啟用或未輸入）</span></p>
+      </div>
+
+      <div class="card space-y-4">
+        <h2 class="font-semibold text-lg">2) 手動策略 / 對手行為</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label class="text-sm">手動策略（未啟用道瓊時生效）</label>
+            <select id="manualStrat" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800">
+              <option value="HIGH">高（積極反制對手上一手，70% 機率）</option>
+              <option value="MID" selected>中（50% 反制 / 50% 隨機）</option>
+              <option value="LOW">低（33% 反制 / 67% 隨機）</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-sm">對手模型</label>
+            <select id="oppModel" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800">
+              <option value="RANDOM" selected>隨機（均勻 1/3）</option>
+              <option value="MIMIC">模仿（70% 機率重複我方上一手）</option>
+              <option value="COUNTER">反制（70% 機率剋制我方上一手）</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label class="text-sm">模擬回合數</label>
+            <input id="rounds" type="number" value="200" min="1" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800" />
+          </div>
+          <div>
+            <label class="text-sm">隨機種子（可空白）</label>
+            <input id="seed" type="text" class="mt-1 w-full rounded-xl border px-3 py-2 bg-white/70 dark:bg-zinc-800" placeholder="例如: berkeley-uc" />
+          </div>
+          <div class="flex items-end"><button id="runSim" class="btn w-full">▶ 立即模擬</button></div>
+        </div>
+      </div>
+
+      <div class="card space-y-4">
+        <h2 class="font-semibold text-lg">3) 單局遊戲</h2>
+        <p class="text-sm">想手動玩一局？選擇你的出拳，右側會顯示電腦（依策略）的出拳與勝負。</p>
+        <div class="flex flex-wrap gap-2">
+          <button class="btn btn-soft" data-play="R">✊ 石頭 (R)</button>
+          <button class="btn btn-soft" data-play="P">✋ 布 (P)</button>
+          <button class="btn btn-soft" data-play="S">✌️ 剪刀 (S)</button>
+          <span class="text-xs text-zinc-500">鍵盤快速鍵：<span class="kbd">R</span>/<span class="kbd">P</span>/<span class="kbd">S</span></span>
+        </div>
+        <div id="oneRound" class="text-sm"></div>
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section class="card space-y-4">
+      <h2 class="font-semibold text-lg">結果</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div><div class="text-xs text-zinc-500">策略使用</div><div id="usedStrat" class="text-xl font-bold">—</div></div>
+        <div><div class="text-xs text-zinc-500">戰績</div><div id="wlr" class="text-xl font-bold">—</div></div>
+        <div><div class="text-xs text-zinc-500">勝率</div><div id="winrate" class="text-xl font-bold">—</div></div>
+        <div><div class="text-xs text-zinc-500">收益（勝=+1, 和=0, 負=-1）</div><div id="score" class="text-xl font-bold">—</div></div>
+      </div>
+      <div class="overflow-auto">
+        <table class="min-w-full text-sm whitespace-nowrap">
+          <thead class="text-left text-zinc-500">
+            <tr><th class="py-2 pr-4">#</th><th class="py-2 pr-4">我方</th><th class="py-2 pr-4">對手</th><th class="py-2 pr-4">結果</th><th class="py-2 pr-4">策略</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="text-xs text-zinc-500 text-center">
+      <p>MIT License · 建議：提交到 GitHub Pages 直接跑（純前端）。如需自動擷取道瓊，請在 <code>fetchDow()</code> 中串接你可用的 API 或自行架設 proxy。</p>
+    </footer>
+  </main>
+
+  <script>
+    // ---------- Utilities ----------
+    const RNG = (seedStr = "") => {
+      // xmur3 + sfc32 — 可重現亂數
+      function xmur3(str){for(var i=0,h=1779033703^str.length;i<str.length;i++)h=Math.imul(h^str.charCodeAt(i),3432918353),h=h<<13|h>>>19;return function(){h=Math.imul(h^h>>>16,2246822507),h=Math.imul(h^h>>>13,3266489909);return (h^h>>>16)>>>0}};
+      function sfc32(a,b,c,d){return function(){a>>>=0;b>>>=0;c>>>=0;d>>>=0;var t=(a+b)|0;a=b;b=c;c=d;d=(d<<11|d>>>21)+t|0;return (t>>>0)/4294967296}};
+      const seed = xmur3(seedStr || (Date.now()+""));
+      return sfc32(seed(), seed(), seed(), seed());
+    }
+
+    const MOVES = ["R","P","S"]; // Rock Paper Scissors
+    const ICON = { R: "✊", P: "✋", S: "✌️" };
+    const NAME = { R: "石頭", P: "布", S: "剪刀" };
+
+    const beats = m => ({R:"S", P:"R", S:"P"}[m]);
+    const beatenBy = m => ({R:"P", P:"S", S:"R"}[m]);
+
+    function result(me, opp){
+      if(me===opp) return 0; // draw
+      return beats(me)===opp ? 1 : -1;
+    }
+
+    // ---------- Opponent models ----------
+    function makeOpponent(model, rng){
+      let lastMine = null;
+      return function next( /* myLast */ myLast ){
+        lastMine = myLast ?? lastMine;
+        if(model === 'RANDOM' || !lastMine){
+          return MOVES[Math.floor(rng()*3)];
+        }
+        if(model === 'MIMIC'){
+          // 70% mimic my last
+          if(rng() < 0.7) return lastMine;
+          return MOVES[Math.floor(rng()*3)];
+        }
+        if(model === 'COUNTER'){
+          // 70% counter my last
+          if(rng() < 0.7) return beatenBy(lastMine);
+          return MOVES[Math.floor(rng()*3)];
+        }
+        return MOVES[Math.floor(rng()*3)];
+      }
+    }
+
+    // ---------- Strategy (High / Mid / Low) ----------
+    function decideMyMove(strat, rng, oppLast){
+      const base = MOVES[Math.floor(rng()*3)];
+      const counter = oppLast ? beatenBy(oppLast) : base;
+      if(strat==='HIGH'){
+        // Aggressive: 70% choose counter, else random
+        return (rng()<0.7 ? counter : base);
+      } else if(strat==='MID'){
+        return (rng()<0.5 ? counter : base);
+      } else { // LOW
+        return (rng()<0.33 ? counter : base);
+      }
+    }
+
+    // ---------- DOW-driven strategy pick ----------
+    function pickStratByDow(change, up=0.5, down=-0.5){
+      if(change==null || Number.isNaN(change)) return null;
+      if(change >= up) return 'HIGH';
+      if(change <= down) return 'LOW';
+      return 'MID';
+    }
+
+    // ---------- Try fetch Dow change (best-effort, may CORS) ----------
+    async function fetchDow(){
+      // 提示：受限於 CORS 與第三方政策，以下僅示範性寫法。
+      // 你可以改為呼叫你自己的後端，或使用允許的公開 API。
+      // 這裡回傳 null 代表抓取失敗。
+      try {
+        // 嘗試 Yahoo CSV（多半被 CORS 擋下，保留示例）
+        // const res = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EDJI?range=1d&interval=1d');
+        // const json = await res.json();
+        // const prev = json.chart.result[0].meta.chartPreviousClose;
+        // const last = json.chart.result[0].indicators.quote[0].close.at(-1);
+        // const pct = ((last - prev) / prev) * 100;
+        // return pct;
+        return null;
+      } catch(e){ return null; }
+    }
+
+    // ---------- DOM ----------
+    const els = {
+      useDow: document.getElementById('useDow'),
+      dowChange: document.getElementById('dowChange'),
+      thUp: document.getElementById('thUp'),
+      thDown: document.getElementById('thDown'),
+      autoPick: document.getElementById('autoPick'),
+      manualStrat: document.getElementById('manualStrat'),
+      oppModel: document.getElementById('oppModel'),
+      rounds: document.getElementById('rounds'),
+      seed: document.getElementById('seed'),
+      runSim: document.getElementById('runSim'),
+      rows: document.getElementById('rows'),
+      usedStrat: document.getElementById('usedStrat'),
+      wlr: document.getElementById('wlr'),
+      winrate: document.getElementById('winrate'),
+      score: document.getElementById('score'),
+      fetchDow: document.getElementById('fetchDow'),
+      oneRound: document.getElementById('oneRound'),
+      dlConfig: document.getElementById('dlConfig'),
+      toggleTheme: document.getElementById('toggleTheme')
+    };
+
+    // Theme toggle
+    (function(){
+      const key = 'rps-theme';
+      const saved = localStorage.getItem(key);
+      if(saved==='dark') document.documentElement.classList.add('dark');
+      els.toggleTheme.addEventListener('click', ()=>{
+        document.documentElement.classList.toggle('dark');
+        localStorage.setItem(key, document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+      });
+    })();
+
+    // Persist basic config
+    (function(){
+      const key = 'rps-config-v1';
+      const load = ()=>{ try{ return JSON.parse(localStorage.getItem(key)||'{}')}catch{return {}} };
+      const save = (obj)=> localStorage.setItem(key, JSON.stringify(obj));
+      const read = ()=>({
+        useDow: els.useDow.checked,
+        dowChange: parseFloat(els.dowChange.value),
+        thUp: parseFloat(els.thUp.value),
+        thDown: parseFloat(els.thDown.value),
+        manualStrat: els.manualStrat.value,
+        oppModel: els.oppModel.value,
+        rounds: parseInt(els.rounds.value||'0',10),
+        seed: els.seed.value
+      });
+      const write = (cfg)=>{
+        if(cfg.useDow!=null) els.useDow.checked = cfg.useDow;
+        if(cfg.dowChange!=null) els.dowChange.value = cfg.dowChange;
+        if(cfg.thUp!=null) els.thUp.value = cfg.thUp;
+        if(cfg.thDown!=null) els.thDown.value = cfg.thDown;
+        if(cfg.manualStrat) els.manualStrat.value = cfg.manualStrat;
+        if(cfg.oppModel) els.oppModel.value = cfg.oppModel;
+        if(cfg.rounds!=null) els.rounds.value = cfg.rounds;
+        if(cfg.seed!=null) els.seed.value = cfg.seed;
+        recalcAutoPick();
+      };
+      const cfg0 = load();
+      write(cfg0);
+      ['useDow','dowChange','thUp','thDown','manualStrat','oppModel','rounds','seed'].forEach(id=>{
+        document.getElementById(id).addEventListener('input', ()=> save(read()));
+      });
+      els.dlConfig.addEventListener('click', (e)=>{
+        e.preventDefault();
+        const blob = new Blob([JSON.stringify(read(), null, 2)], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'rps-config.json'; a.click();
+        URL.revokeObjectURL(url);
+      });
+    })();
+
+    function recalcAutoPick(){
+      const use = els.useDow.checked;
+      const chg = parseFloat(els.dowChange.value);
+      const up = parseFloat(els.thUp.value);
+      const dn = parseFloat(els.thDown.value);
+      if(!use){ els.autoPick.textContent = '（未啟用）'; return null; }
+      const pick = pickStratByDow(chg, up, dn);
+      els.autoPick.textContent = pick ? ({HIGH:'高',MID:'中',LOW:'低'}[pick]+'（依 '+chg.toFixed(2)+'%）') : '（尚無有效變動值）';
+      return pick;
+    }
+
+    ['useDow','dowChange','thUp','thDown'].forEach(id=>{
+      document.getElementById(id).addEventListener('input', recalcAutoPick);
+    });
+
+    els.fetchDow.addEventListener('click', async ()=>{
+      els.fetchDow.disabled = true; els.fetchDow.textContent = '擷取中…';
+      const pct = await fetchDow();
+      if(pct==null){ alert('擷取失敗：可能因 CORS 限制或來源不可用。請手動輸入或自行串接 API。'); }
+      else { els.dowChange.value = pct.toFixed(2); }
+      els.fetchDow.disabled = false; els.fetchDow.textContent = '⚡ 嘗試擷取今日道瓊';
+      recalcAutoPick();
+    });
+
+    // ---------- Simulation ----------
+    function simulate({ stratPick, oppModel, rounds, seed }){
+      const rng = RNG(seed||'');
+      const opp = makeOpponent(oppModel, rng);
+      let myLast = null, oppLast = null;
+      const logs = [];
+      let W=0, L=0, D=0, score=0;
+
+      for(let i=1;i<=rounds;i++){
+        const myMove = decideMyMove(stratPick, rng, oppLast);
+        const oppMove = opp(myLast);
+        const res = result(myMove, oppMove);
+        if(res>0){W++; score++;} else if(res<0){L++; score--;} else {D++;}
+        logs.push({ i, myMove, oppMove, res, strat: stratPick });
+        myLast = myMove; oppLast = oppMove;
+      }
+      return { logs, W, L, D, score };
+    }
+
+    function renderTable(logs){
+      els.rows.innerHTML = logs.map(({i,myMove,oppMove,res,strat})=>{
+        const r = res>0? '勝' : res<0? '負' : '和';
+        const color = res>0? 'text-emerald-600' : res<0? 'text-rose-600' : 'text-zinc-500';
+        return `<tr class="border-t border-zinc-200/60 dark:border-zinc-800/60">
+          <td class="py-2 pr-4">${i}</td>
+          <td class="py-2 pr-4">${ICON[myMove]} ${NAME[myMove]}</td>
+          <td class="py-2 pr-4">${ICON[oppMove]} ${NAME[oppMove]}</td>
+          <td class="py-2 pr-4 ${color}">${r}</td>
+          <td class="py-2 pr-4">${{HIGH:'高',MID:'中',LOW:'低'}[strat]}</td>
+        </tr>`
+      }).join('');
+    }
+
+    function run(){
+      const auto = recalcAutoPick();
+      const stratPick = (els.useDow.checked && auto) ? auto : els.manualStrat.value;
+      const cfg = {
+        stratPick,
+        oppModel: els.oppModel.value,
+        rounds: Math.max(1, parseInt(els.rounds.value||'1',10)),
+        seed: els.seed.value||''
+      };
+      const { logs, W, L, D, score } = simulate(cfg);
+      renderTable(logs);
+      els.usedStrat.textContent = ({HIGH:'高',MID:'中',LOW:'低'}[stratPick]) + (els.useDow.checked? '（道瓊）':'（手動）');
+      els.wlr.textContent = `${W} 勝 / ${L} 負 / ${D} 和`;
+      const winrate = (W / (W+L+D)) * 100;
+      els.winrate.textContent = isFinite(winrate)? winrate.toFixed(1)+'%' : '—';
+      els.score.textContent = String(score);
+    }
+
+    els.runSim.addEventListener('click', run);
+
+    // ---------- One-round play ----------
+    function computerMoveForOneRound(){
+      const auto = recalcAutoPick();
+      const stratPick = (els.useDow.checked && auto) ? auto : els.manualStrat.value;
+      // 單局沒有對手上一手資訊，等同於隨機/反制權重對空值
+      const rng = RNG();
+      return { stratPick, move: decideMyMove(stratPick, rng, null) };
+    }
+
+    function playOneRound(humanMove){
+      const { stratPick, move: aiMove } = computerMoveForOneRound();
+      const res = result(humanMove, aiMove);
+      const txt = res>0? '你贏了' : res<0? '你輸了' : '平手';
+      els.oneRound.innerHTML = `
+        <div class="mt-2 p-3 rounded-xl bg-zinc-100 dark:bg-zinc-800">
+          <div>你出：<b>${ICON[humanMove]} ${NAME[humanMove]}</b></div>
+          <div>電腦（${{HIGH:'高',MID:'中',LOW:'低'}[stratPick]}策略）出：<b>${ICON[aiMove]} ${NAME[aiMove]}</b></div>
+          <div class="mt-1">結果：<b>${txt}</b></div>
+        </div>`;
+    }
+
+    document.querySelectorAll('[data-play]').forEach(btn=>{
+      btn.addEventListener('click', ()=> playOneRound(btn.dataset.play));
+    });
+
+    window.addEventListener('keydown', (e)=>{
+      const k = e.key.toLowerCase();
+      if(k==='r') playOneRound('R');
+      if(k==='p') playOneRound('P');
+      if(k==='s') playOneRound('S');
+    });
+
+    // 初次渲染
+    recalcAutoPick();
+  </script>
+</body>
+</html>
